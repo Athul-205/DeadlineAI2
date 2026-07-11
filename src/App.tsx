@@ -2015,7 +2015,7 @@ export default function App() {
                         required
                         value={commitmentForm.title}
                         onChange={(e) => setCommitmentForm({ ...commitmentForm, title: e.target.value })}
-                        placeholder="e.g. Google AI Studio Hackathon Pitch"
+                        placeholder="e.g. AI Hackathon Pitch"
                         className="w-full bg-slate-950/80 border border-slate-800 focus:border-cyan-500/50 rounded-xl px-4 py-3 text-sm font-sans focus:outline-none text-slate-200 transition-colors"
                       />
                     </div>
