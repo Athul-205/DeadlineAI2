@@ -21,11 +21,7 @@ function getAi(): GoogleGenAI {
     }
     aiClient = new GoogleGenAI({
       apiKey: key || 'DEMO_KEY',
-      httpOptions: {
-        headers: {
-          'User-Agent': 'aistudio-build',
-        },
-      },
+      httpOptions: {}
     });
   }
   return aiClient;
