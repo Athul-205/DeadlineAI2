@@ -38,7 +38,7 @@ export function getDefaultDb(): DatabaseSchema {
         category: 'Work',
         difficulty: 'hard',
         energyRequired: 'high',
-        notes: 'Clean up the route handlers and optimize JSON schema response formatting.',
+        notes: 'Finish implementation and test all features.',
         status: 'completed',
         createdAt: new Date().toISOString()
       },
@@ -52,7 +52,7 @@ export function getDefaultDb(): DatabaseSchema {
         category: 'Design',
         difficulty: 'medium',
         energyRequired: 'high',
-        notes: 'Preapare Presentation.',
+        notes: 'Prepare Presentation.',
         status: 'pending',
         createdAt: new Date().toISOString()
       },
@@ -66,7 +66,7 @@ export function getDefaultDb(): DatabaseSchema {
         category: 'Study',
         difficulty: 'hard',
         energyRequired: 'high',
-        notes: 'supervised and unsupervised.',
+        notes: 'Revise supervised and unsupervised learning algorithms.',
         status: 'pending',
         createdAt: new Date().toISOString()
       },
