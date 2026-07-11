@@ -124,7 +124,7 @@ export function getDefaultDb(): DatabaseSchema {
     aiHistory: [],
     settings: {
       userName: 'Netrunner',
-      productivityGoal: 'Maximize focus blocks and prevent developer burnout',
+      productivityGoal: 'Stay productive throughout the day.',
       workMode: 'work',
       focusDuration: 25,
       breakDuration: 5
