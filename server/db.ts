@@ -52,7 +52,7 @@ export function getDefaultDb(): DatabaseSchema {
         category: 'Design',
         difficulty: 'medium',
         energyRequired: 'high',
-        notes: 'Add glowing neon shadows, glassmorphism card styles, and premium transitions.',
+        notes: 'Preapare Presentation.',
         status: 'pending',
         createdAt: new Date().toISOString()
       },
@@ -106,7 +106,7 @@ export function getDefaultDb(): DatabaseSchema {
         date: todayStr,
         startTime: '09:00',
         endTime: '15:00',
-        description: 'Discuss adaptive scheduling architecture and model choices with judges.',
+        description: 'Attend college lectures.',
         colorTag: 'purple',
         createdAt: new Date().toISOString()
       },
@@ -116,7 +116,7 @@ export function getDefaultDb(): DatabaseSchema {
         date: todayStr,
         startTime: '20:00',
         endTime: '21:00',
-        description: 'Align design constraints, code modularization, and feature freezing.',
+        description: 'Have dinner with family.',
         colorTag: 'cyan',
         createdAt: new Date().toISOString()
       }
