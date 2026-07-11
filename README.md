@@ -155,15 +155,7 @@ npm run dev
 
 ---
 
-# 📂 Project Structure
 
-```
-src/
-server/
-public/
-```
-
----
 
 # 🔮 Future Improvements
 
