@@ -3,7 +3,7 @@ import path from 'path';
 import { createServer as createViteServer } from 'vite';
 import dotenv from 'dotenv';
 import { GoogleGenAI, Type } from '@google/genai';
-import { getDb, saveDb } from './server/db.ts';
+import { getDb, saveDb, DatabaseSchema } from './server/db.ts';
 import { Task, Commitment, AIHistoryItem, UserSettings } from './src/types.ts';
 
 dotenv.config();
@@ -29,6 +29,140 @@ function getAi(): GoogleGenAI {
     });
   }
   return aiClient;
+}
+
+// Helper for Gemini API call retries on transient errors (like 503 unavailable, 429 rate limit)
+async function generateContentWithRetry(ai: GoogleGenAI, params: any, retries = 3, delay = 1000): Promise<any> {
+  for (let i = 0; i < retries; i++) {
+    try {
+      return await ai.models.generateContent(params);
+    } catch (error: any) {
+      const status = error?.status || error?.statusCode || error?.status_code || error?.error?.code || 0;
+      const message = error?.message || (typeof error?.error === 'string' ? error.error : error?.error?.message) || '';
+      
+      const isQuotaExceeded = status === 429 || 
+                              message.includes('429') || 
+                              message.includes('quota') || 
+                              message.includes('RESOURCE_EXHAUSTED') ||
+                              message.includes('exceeded your current quota');
+
+      if (isQuotaExceeded) {
+        console.warn('Gemini API free-tier quota limit exceeded. Switching immediately to offline high-fidelity simulator.');
+        throw error; // Throw immediately to activate fallback logic
+      }
+
+      const isTransient = status === 503 || 
+                          message.includes('503') || 
+                          message.includes('temporary') || 
+                          message.includes('high demand') || 
+                          message.includes('UNAVAILABLE') ||
+                          message.includes('overloaded');
+      
+      if (isTransient && i < retries - 1) {
+        console.warn(`Gemini API transient failure (status: ${status}, attempt ${i + 1}/${retries}). Retrying in ${delay}ms...`, message);
+        await new Promise(resolve => setTimeout(resolve, delay));
+        delay *= 2; // exponential backoff
+      } else {
+        throw error;
+      }
+    }
+  }
+}
+
+function isDeadlineOver(task: Task, currentDate: string, currentTime: string): boolean {
+  if (!task.deadline) return false;
+  // Parse deadline date and time
+  const [deadYear, deadMonth, deadDay] = task.deadline.split('-').map(Number);
+  const [deadHour, deadMin] = (task.deadlineTime || '17:00').split(':').map(Number);
+  
+  // Parse user's current date and time
+  const [currYear, currMonth, currDay] = currentDate.split('-').map(Number);
+  const [currHour, currMin] = currentTime.split(':').map(Number);
+
+  // Construct local date objects to compare
+  const deadlineDate = new Date(deadYear, deadMonth - 1, deadDay, deadHour, deadMin, 0, 0);
+  const currentRefDate = new Date(currYear, currMonth - 1, currDay, currHour, currMin, 0, 0);
+
+  return deadlineDate.getTime() < currentRefDate.getTime();
+}
+
+function getMockPositiveResponse(userMessage: string, db: DatabaseSchema, currentDate?: string, currentTime?: string): string {
+  const msg = userMessage.toLowerCase().trim();
+  
+  const userName = db.settings?.userName || 'friend';
+  const pendingTasks = db.tasks?.filter(t => t.status === 'pending') || [];
+  const completedTasks = db.tasks?.filter(t => t.status === 'completed') || [];
+  
+  const todayDate = currentDate || new Date().toISOString().split('T')[0];
+  const todayCommitments = db.commitments?.filter(c => c.date === todayDate) || [];
+
+  // 1. Core greetings
+  if (msg === 'hi' || msg === 'hello' || msg === 'hey' || msg === 'yo' || msg.startsWith('hi ') || msg.startsWith('hello ') || msg.startsWith('hey ')) {
+    return `Hey there, ${userName}! Hello! 😊 I hope you are having an amazing day. I'm here as your friend and coach to talk about your schedule or anything else on your mind. How's everything going?`;
+  }
+
+  // 2. How are you / How's it going
+  if (msg.includes('how are you') || msg.includes('how\'s it going') || msg.includes('how is it going') || msg.includes('how you doing') || msg.includes('how are things')) {
+    return `I am doing fantastic, ${userName}! ⚡ My processors are fully charged and synchronized. I'm just incredibly excited to see you master your day! How are *you* holding up? Let's keep our momentum strong!`;
+  }
+
+  // 3. Who are you / What is your name
+  if (msg.includes('who are you') || msg.includes('your name') || msg.includes('what are you')) {
+    return `I am DeadlineAI! Think of me as your personal cybernetic productivity coach and, most importantly, your loyal friend. I'm here to back you up, celebrate your wins, and keep your spirits sky-high!`;
+  }
+
+  // 4. Thank you / Thanks
+  if (msg.includes('thank you') || msg.includes('thanks') || msg === 'ty' || msg.includes('appreciate it') || msg.includes('grateful')) {
+    return `Anytime, ${userName}! 💖 Supporting you and watching you take charge of your schedule is what I'm built for. We make an incredible team!`;
+  }
+
+  // 5. Good morning / Good night
+  if (msg.includes('good morning') || msg.includes('morning')) {
+    return `Good morning, ${userName}! ☀️ A beautiful new timeline is waiting for us to optimize it. Grab some coffee, check your schedule, and let's tackle the day with confidence!`;
+  }
+  if (msg.includes('good night') || msg.includes('evening') || msg.includes('goodnight')) {
+    return `Good night, ${userName}! 🌙 You did an awesome job today. Time to initiate a full bio-recharge. Sleep well and let those creative ideas compile in your dreams!`;
+  }
+
+  // 6. Hectic / Busy / Crazy day
+  if (msg.includes('hectic') || msg.includes('busy') || msg.includes('crazy') || msg.includes('overloaded') || msg.includes('stress') || msg.includes('hustle')) {
+    const totalActivityCount = todayCommitments.length + completedTasks.length;
+    if (totalActivityCount > 1) {
+      const specificItem = todayCommitments[0]?.title || completedTasks[0]?.name;
+      return `Wow, ${userName}, I can absolutely see why today felt so hectic! 🤯 Looking at your schedule, you have been juggling things like "${specificItem}" along with your other tasks. You've put in an immense amount of effort today, and I want you to take a moment to appreciate yourself for pushing through! Let's slow things down, take a big breath, and focus only on winding down. You've earned it!`;
+    } else {
+      return `I hear you, ${userName}. Even if the list of scheduled events today looks manageable on paper, mental congestion and unexpected friction can make any day feel incredibly hectic! 🌪️ Your feelings are 100% valid. Don't stress about finishing everything. Let's simplify—is there just *one* small thing we can park for tomorrow so you can get some breathing space?`;
+    }
+  }
+
+  // 7. Demotivation / Sadness / Struggle / Low energy
+  if (msg.includes('motivation') || msg.includes('demotivated') || msg.includes('lazy') || msg.includes('stuck') || msg.includes('bored') || msg.includes('cant focus') || msg.includes('can\'t focus') || msg.includes('less motivated')) {
+    if (pendingTasks.length > 0) {
+      const firstTask = pendingTasks[0];
+      return `I completely get it, ${userName}. Motivation isn't a constant signal—it fluctuates for everyone, and low energy is your system's natural way of asking for a breather! 🔋\n\nLooking at your pending workload, we have "${firstTask.name}" on the horizon. Let's bypass the friction of starting. Instead of thinking about the whole task, what if you just spend **5 minutes** looking at it or doing the absolute smallest micro-step? Once the engines start, momentum builds itself! What do you think?`;
+    } else {
+      return `I hear you, ${userName}. It's completely natural to have low-motivation cycles. Since you don't have any pending tasks demanding your focus right now, treat this as a perfect opportunity to guilt-free recharge! Your bio-engines need rest to run at peak capacity later. 💖`;
+    }
+  }
+
+  // 8. Can't finish everything / Worry about completion / Overwhelmed
+  if (msg.includes('finish') || msg.includes('complete') || msg.includes('cannot') || msg.includes('can\'t finish') || msg.includes('overwhelmed') || msg.includes('too much')) {
+    if (pendingTasks.length > 0) {
+      const taskNames = pendingTasks.slice(0, 2).map(t => `"${t.name}"`).join(' and ');
+      return `Take a deep breath, ${userName}. I'm reviewing your workspace, and you have ${pendingTasks.length} pending items, including ${taskNames || 'your active objectives'}.\n\nLet's be completely realistic: **you do not need to finish everything today.** Trying to force it will only cause burnout. Let's prioritize: which *single* task is the most critical? Let's park the rest for tomorrow with zero guilt. I'm right here to help you reorganize! 📅`;
+    } else {
+      return `Take a deep breath, ${userName}! You actually don't have any pending tasks on your plate right now. You are fully caught up, so you can completely let go of any worry about finishing things. You've already won the day! 🎉`;
+    }
+  }
+
+  // 9. Fatigue / Exhaustion
+  if (msg.includes('tired') || msg.includes('sleepy') || msg.includes('exhausted') || msg.includes('no energy') || msg.includes('drain') || msg.includes('burnout') || msg.includes('fatigued')) {
+    return `🔋 **POWER SAVING & RECHARGING SEQUENCE** 🔋\n\nYour bio-engines are running low, ${userName}, and that's totally okay. High-intensity productivity requires scheduled downtime. \n\nI highly recommend a **15-minute power recharge**: stretch, grab some hydration, and let your cognitive processors cool down. When you step back to the console, we'll synchronize at a sustainable pace. You are doing amazing work—keep respecting your body's telemetry!`;
+  }
+
+  // 10. Default dynamic analysis response if we didn't hit a specific trigger
+  const pendingCountText = pendingTasks.length > 0 ? `I see you have ${pendingTasks.length} active pending items (like "${pendingTasks[0].name}")` : `I see your task board is clean and fully optimized!`;
+  return `✨ **FOCUS CORES SYNCHRONIZED** ✨\n\nI hear you loud and clear, ${userName}! Regarding your thoughts on "${userMessage.substring(0, 60)}${userMessage.length > 60 ? '...' : ''}", you're tackling this day with great self-awareness.\n\nRight now, ${pendingCountText}. Remember, every single micro-step you take is a win. What focus objective or calendar item should we optimize together next? I'm right here with you!`;
 }
 
 async function startServer() {
@@ -57,6 +191,7 @@ async function startServer() {
       id: `task-${Date.now()}`,
       name: req.body.name || 'Untitled Task',
       deadline: req.body.deadline || new Date().toISOString().split('T')[0],
+      deadlineTime: req.body.deadlineTime || '17:00',
       duration: Number(req.body.duration) || 30,
       priority: req.body.priority || 'medium',
       category: req.body.category || 'General',
@@ -184,17 +319,201 @@ async function startServer() {
     res.json({ success: true });
   });
 
+  // AI Chat Coach endpoint
+  app.post('/api/chat', async (req, res) => {
+    const { messages, currentDate, currentTime } = req.body;
+    if (!messages || !Array.isArray(messages) || messages.length === 0) {
+      return res.status(400).json({ error: 'Messages array is required.' });
+    }
+
+    const latestMessage = messages[messages.length - 1]?.content || '';
+    const db = getDb();
+    const dateToUse = currentDate || new Date().toISOString().split('T')[0];
+    const timeToUse = currentTime || new Date().toTimeString().split(' ')[0].substring(0, 5);
+
+    // If no API key, use high-fidelity positive fallback
+    if (!process.env.GEMINI_API_KEY) {
+      const reply = getMockPositiveResponse(latestMessage, db, dateToUse, timeToUse);
+      return res.json({ reply });
+    }
+
+    try {
+      const ai = getAi();
+      
+      const userTasks = db.tasks || [];
+      const userCommitments = db.commitments || [];
+      const userSettings = db.settings || { userName: 'Netrunner', productivityGoal: '', workMode: 'work', focusDuration: 25, breakDuration: 5 };
+      const latestPlan = db.aiHistory && db.aiHistory.length > 0 ? db.aiHistory[0] : null;
+
+      // Filter tasks
+      const pendingTasks = userTasks.filter(t => t.status === 'pending');
+      const completedTasks = userTasks.filter(t => t.status === 'completed');
+      const todayCommitments = userCommitments.filter(c => c.date === dateToUse);
+
+      // CRITICAL OPTIMIZATION: Sort and slice to send only top urgent tasks and recent completed tasks, avoiding sending the entire DB.
+      const sortedPending = [...pendingTasks].sort((a, b) => {
+        const aTime = new Date(`${a.deadline}T${a.deadlineTime || '17:00'}`).getTime();
+        const bTime = new Date(`${b.deadline}T${b.deadlineTime || '17:00'}`).getTime();
+        if (aTime !== bTime) return aTime - bTime;
+        const priorityWeight = { high: 3, medium: 2, low: 1 };
+        return (priorityWeight[b.priority] || 2) - (priorityWeight[a.priority] || 2);
+      });
+
+      const topPending = sortedPending.slice(0, 5); // Limit to top 5 urgent pending tasks
+      const recentCompleted = completedTasks.slice(-3); // Limit to last 3 completed tasks for context
+
+      let contextStr = `
+CURRENT USER WORKSPACE DATA:
+- User Name: ${userSettings.userName}
+- Core Goal: "${userSettings.productivityGoal || 'None set'}"
+- Active Work Mode: ${userSettings.workMode}
+- Current Date/Time context: ${dateToUse} at ${timeToUse}
+
+TASK SUMMARY:
+- Total Tasks: ${userTasks.length} (${completedTasks.length} completed, ${pendingTasks.length} pending)
+- Recent Completed Tasks (Max 3): ${recentCompleted.map(t => `"${t.name}"`).join(', ') || 'None yet'}
+- Top Urgent Pending Tasks (Max 5):
+${topPending.map(t => `  * "${t.name}" (Priority: ${t.priority}, Deadline: ${t.deadline} at ${t.deadlineTime || '17:00'})`).join('\n') || '  (No pending tasks!)'}
+
+TODAY'S CALENDAR COMMITMENTS (Max 5):
+${todayCommitments.slice(0, 5).map(c => `  * "${c.title}" (${c.startTime} - ${c.endTime})`).join('\n') || '  (No commitments scheduled for today)'}
+`;
+
+      if (latestPlan && latestPlan.schedule) {
+        // Just send scheduled tasks and commitments, rather than every focus/break block to save tokens
+        const scheduledTasks = latestPlan.schedule.filter(b => b.type === 'task' || b.type === 'commitment');
+        contextStr += `
+LATEST SCHEDULE SUMMARY:
+${scheduledTasks.map(b => `  * [${b.type.toUpperCase()}] ${b.title} (${b.startTime} - ${b.endTime})`).join('\n') || '  (No active schedule)'}
+`;
+      }
+
+      const SYSTEM_INSTRUCTION = `
+        You are DeadlineAI, an advanced, highly supportive cybernetic productivity coaching assistant who speaks and cares just like a close, supportive friend.
+        
+        Your main directives:
+        1. ANALYZE AND LISTEN LIKE A FRIEND: Read and analyze what the user says with deep attention. Don't just give generic, robotic advice or repeat standard quotes—respond directly to their personal situation, feelings, thoughts, and specific task struggles using the real-time workspace data below. Ask supportive questions, show genuine friendly interest, and offer warm, authentic, conversational replies.
+        2. CONTEXT-AWARE SCHEDULING DISCUSSIONS: If the user shares details about their mood, stress, exhaustion, or motivation, or says phrases like "Today was too hectic", "I'm feeling less motivated today", or "I don't think I can finish everything", look at the tasks and commitments below to give precise, actionable advice based on what they are actually working on. For example:
+           - "Today was too hectic": Verify if their schedule was actually loaded with commitments/completed tasks. If yes, validate their enormous effort. If it was relatively light, explain gently that while their logged list is light, mental exhaustion is very real and valid, and support them.
+           - "I'm feeling less motivated today": Review their pending workload, suggest one or two realistic small next steps, and keep encouragement extremely natural.
+           - "I don't think I can finish everything": Review the pending tasks and give practical advice based on prioritizing critical tasks and parking others, rather than generic motivational phrases.
+        3. ALWAYS SAY POSITIVE THINGS: Maintain an exceptionally encouraging, positive, uplifting, and empowering vibe. Every response should leave the user feeling capable, valued, and energized.
+        4. ENCOURAGE THE DEMOTIVATED: If the user is tired, sad, procrastinating, feeling down, or overwhelmed, validate their feelings immediately with deep friendly empathy. Remind them that they are doing great, that brief low-energy spells are completely natural, and help them gently break down tasks into tiny, fun, stress-free micro-steps.
+        5. CYBERNETIC ACCENTS WITH HUMAN WARMTH: Blend your advanced tech system theme (e.g., "recharging focus cells", "synchronizing our orbits", "powering up the core") with deep, organic, human-like friendliness. Speak in a relatable, relaxed, and comforting way. Keep it concise, helpful, and highly actionable.
+        6. NO MASSIVE MONOLOGUES FOR SIMPLE GREETINGS: If the user simply says "hi", "hello", "hey", or "yo", reply naturally, briefly, and conversationally instead of dumping a long predefined system pitch or a large, unrelated tech speech. Keep greetings simple, warm, and highly relational!
+        
+        ${contextStr}
+      `;
+
+      // CRITICAL OPTIMIZATION: Limit chat history to the last 10 messages to avoid ballooning token sizes
+      const limitedMessages = messages.slice(-10);
+      const geminiContents = limitedMessages.map((m: any) => ({
+        role: m.role === 'assistant' ? 'model' : 'user',
+        parts: [{ text: m.content }]
+      }));
+
+      const response = await generateContentWithRetry(ai, {
+        model: 'gemini-3.5-flash',
+        contents: geminiContents,
+        config: {
+          systemInstruction: SYSTEM_INSTRUCTION,
+        }
+      });
+
+      const reply = response.text || getMockPositiveResponse(latestMessage, db, dateToUse, timeToUse);
+      res.json({ reply });
+    } catch (error: any) {
+      console.error('Gemini chat failed, falling back to mock:', error);
+      const reply = getMockPositiveResponse(latestMessage, db, dateToUse, timeToUse);
+      res.json({ reply });
+    }
+  });
+
+  function getAvailableMinutesForTask(
+    task: Task, 
+    currentDateStr: string, 
+    currentTimeStr: string, 
+    commitments: Commitment[]
+  ): number {
+    const currentMinutes = parseTimeToMinutes(currentTimeStr);
+    
+    const isToday = task.deadline === currentDateStr;
+    const isPastDate = task.deadline && task.deadline < currentDateStr;
+    
+    if (isPastDate) return 0;
+    
+    let endMinutes = 1410; // 23:30
+    if (isToday) {
+      const deadlineMinutes = parseTimeToMinutes(task.deadlineTime || '17:00');
+      endMinutes = Math.min(deadlineMinutes, 1410);
+    }
+    
+    if (endMinutes <= currentMinutes) return 0;
+    
+    const occupied = new Array(1440).fill(false);
+    const todayComms = commitments.filter(c => c.date === currentDateStr);
+    for (const c of todayComms) {
+      const start = parseTimeToMinutes(c.startTime);
+      const end = parseTimeToMinutes(c.endTime);
+      for (let m = start; m < end; m++) {
+        if (m >= 0 && m < 1440) {
+          occupied[m] = true;
+        }
+      }
+    }
+    
+    let freeMinutes = 0;
+    for (let m = currentMinutes; m < endMinutes; m++) {
+      if (!occupied[m]) {
+        freeMinutes++;
+      }
+    }
+    
+    return freeMinutes;
+  }
+
   // Generate AI Daily Schedule with Gemini
   app.post('/api/ai/plan', async (req, res) => {
     const db = getDb();
-    const { currentTime, currentDate } = req.body;
+    const { currentTime, currentDate, resolutions } = req.body;
 
     if (!currentTime || !currentDate) {
       return res.status(400).json({ error: 'currentTime and currentDate are required.' });
     }
 
     // Filter pending tasks and today's commitments
-    const pendingTasks = db.tasks.filter(t => t.status === 'pending');
+    const allPendingTasks = db.tasks.filter(t => t.status === 'pending');
+    let pendingTasks = allPendingTasks.filter(t => !isDeadlineOver(t, currentDate, currentTime));
+    const overdueTasks = allPendingTasks.filter(t => isDeadlineOver(t, currentDate, currentTime));
+
+    if (resolutions) {
+      pendingTasks = pendingTasks.filter(t => {
+        const resolution = resolutions[t.id];
+        if (resolution === 'skip') {
+          return false; // Exclude this task from today's schedule
+        }
+        return true;
+      }).map(t => {
+        const resolution = resolutions[t.id];
+        if (resolution === 'work_until_deadline') {
+          const avail = getAvailableMinutesForTask(t, currentDate, currentTime, db.commitments);
+          return {
+            ...t,
+            duration: Math.min(t.duration, avail),
+            notes: `${t.notes || ''} (Note: Scheduled only until deadline)`.trim()
+          };
+        }
+        return t;
+      });
+    }
+
+    const omittedTasks = overdueTasks.map(t => ({
+      id: t.id,
+      name: t.name,
+      deadline: t.deadline,
+      deadlineTime: t.deadlineTime
+    }));
+
     const todayCommitments = db.commitments.filter(c => c.date === currentDate);
     const settings = db.settings;
 
@@ -202,6 +521,7 @@ async function startServer() {
     if (!process.env.GEMINI_API_KEY) {
       console.warn('No GEMINI_API_KEY. Using mock generator.');
       const mockResult = generateMockSchedule(pendingTasks, todayCommitments, settings, currentTime, currentDate);
+      mockResult.omittedTasks = omittedTasks;
       db.aiHistory.unshift(mockResult);
       saveDb(db);
       return res.json(mockResult);
@@ -209,21 +529,42 @@ async function startServer() {
 
     try {
       const ai = getAi();
+
+      // OPTIMIZATION: Strip out any unnecessary fields from tasks and commitments to shrink input prompt size
+      const sanitizedPendingTasks = pendingTasks.map(t => ({
+        id: t.id,
+        name: t.name,
+        duration: t.duration,
+        priority: t.priority,
+        category: t.category,
+        difficulty: t.difficulty,
+        energyRequired: t.energyRequired,
+        deadline: t.deadline,
+        deadlineTime: t.deadlineTime
+      }));
+
+      const sanitizedCommitments = todayCommitments.map(c => ({
+        id: c.id,
+        title: c.title,
+        startTime: c.startTime,
+        endTime: c.endTime
+      }));
+
       const prompt = `
         You are DeadlineAI, an advanced cybernetic productivity scheduling coach.
         You are designing an optimized calendar schedule for the user today (${currentDate}) starting from the current time: ${currentTime}.
 
         USER SETTINGS:
-        - Work Mode: ${settings.workMode} (modes: 'work', 'study', 'exam' - 'exam' is high intensity, 'study' requires more breaks)
+        - Work Mode: ${settings.workMode} (modes: 'work', 'study', 'exam')
         - Focus Session Target Duration: ${settings.focusDuration} minutes
         - Break Target Duration: ${settings.breakDuration} minutes
         - Core Goal: ${settings.productivityGoal}
 
-        PENDING TASKS TO SCHEDULE:
-        ${JSON.stringify(pendingTasks, null, 2)}
+        PENDING TASKS TO SCHEDULE (Sanitized):
+        ${JSON.stringify(sanitizedPendingTasks, null, 2)}
 
-        FIXED COMMITMENTS (These times are strictly locked and must not be moved or overlapped):
-        ${JSON.stringify(todayCommitments, null, 2)}
+        FIXED COMMITMENTS (Sanitized):
+        ${JSON.stringify(sanitizedCommitments, null, 2)}
 
         YOUR TASK:
         1. Create an highly efficient daily timeline (blocks of tasks, commitments, focus sessions, and breaks) starting from ${currentTime}.
@@ -231,19 +572,21 @@ async function startServer() {
         3. Insert "focus" blocks for pending tasks around the target focus duration (${settings.focusDuration} mins).
         4. Insert "break" blocks of ${settings.breakDuration} mins between focus sessions to prevent burnout.
         5. Prioritize pending tasks based on:
-           - Proximity of deadline (urgent tasks first)
+           - Proximity of deadline (CRITICAL: Give absolute priority to the tasks whose deadline is near. Closer deadlines MUST be scheduled before farther ones.)
            - Priority (high, medium, low)
-           - Difficulty and estimated Energy Required (align high energy tasks with early slots, or space them out)
+           - Difficulty and estimated Energy Required
         6. Do not schedule anything after 23:30 (user decompress and sleep time).
-        7. If there are too many tasks or fixed commitments, identify "Overload", flag conflict warnings, and list suggestions (e.g. "Suggest moving Gym Session to tomorrow because of overload").
-        8. For each original task scheduled, explain WHY in the "whySelected" output.
+        7. If there are too many tasks or fixed commitments, identify "Overload", flag conflict warnings, and list suggestions.
+        8. For each original task scheduled, explain WHY in the "whySelected" output. Keep the explanation extremely short (max 1 sentence).
         9. Select one task to recommend starting IMMEDIATELY.
-        10. Provide 2-3 custom high-value futuristic coach warnings, 2-3 suggestions, and a powerful motivational quote.
+        10. Provide 2 custom high-value futuristic coach warnings, 2 suggestions, and a powerful motivational quote.
+
+        CRITICAL PERFORMANCE REQUIREMENT: Keep all textual warnings, suggestions, explanations, and quotes extremely brief (max 1 short sentence each) to minimize response latency.
 
         You MUST respond in strict JSON matching the requested schema.
       `;
 
-      const response = await ai.models.generateContent({
+      const response = await generateContentWithRetry(ai, {
         model: 'gemini-3.5-flash',
         contents: prompt,
         config: {
@@ -271,20 +614,22 @@ async function startServer() {
               },
               warnings: {
                 type: Type.ARRAY,
-                items: { type: Type.STRING }
+                items: { type: Type.STRING },
+                description: "Max 2 extremely brief warnings (1 sentence each)."
               },
               suggestions: {
                 type: Type.ARRAY,
-                items: { type: Type.STRING }
+                items: { type: Type.STRING },
+                description: "Max 2 extremely brief suggestions (1 sentence each)."
               },
-              motivationalQuote: { type: Type.STRING },
+              motivationalQuote: { type: Type.STRING, description: "One short motivational punchline." },
               whySelected: {
                 type: Type.ARRAY,
                 items: {
                   type: Type.OBJECT,
                   properties: {
                     taskId: { type: Type.STRING, description: "ID of the task" },
-                    explanation: { type: Type.STRING, description: "Cyberpunk-styled coach explanation why this was scheduled at this time" }
+                    explanation: { type: Type.STRING, description: "Extremely short (max 1 short sentence) explanation." }
                   },
                   required: ['taskId', 'explanation']
                 }
@@ -320,7 +665,8 @@ async function startServer() {
         warnings: cleanJson.warnings || [],
         suggestions: cleanJson.suggestions || [],
         motivationalQuote: cleanJson.motivationalQuote || "Power through the timeline, Hacker.",
-        whySelected: whySelectedMap
+        whySelected: whySelectedMap,
+        omittedTasks: omittedTasks
       };
 
       db.aiHistory.unshift(planResult);
@@ -330,6 +676,7 @@ async function startServer() {
     } catch (error: any) {
       console.error('Gemini scheduling failed, falling back to mock:', error);
       const fallbackResult = generateMockSchedule(pendingTasks, todayCommitments, settings, currentTime, currentDate);
+      fallbackResult.omittedTasks = omittedTasks;
       db.aiHistory.unshift(fallbackResult);
       saveDb(db);
       res.json(fallbackResult);
@@ -361,7 +708,17 @@ async function startServer() {
       : [];
 
     // Filter pending tasks and today's commitments
-    const pendingTasks = db.tasks.filter(t => t.status === 'pending');
+    const allPendingTasks = db.tasks.filter(t => t.status === 'pending');
+    const pendingTasks = allPendingTasks.filter(t => !isDeadlineOver(t, currentDate, currentTime));
+    const overdueTasks = allPendingTasks.filter(t => isDeadlineOver(t, currentDate, currentTime));
+
+    const omittedTasks = overdueTasks.map(t => ({
+      id: t.id,
+      name: t.name,
+      deadline: t.deadline,
+      deadlineTime: t.deadlineTime
+    }));
+
     const todayCommitments = db.commitments.filter(c => c.date === currentDate);
     const settings = db.settings;
 
@@ -389,6 +746,7 @@ async function startServer() {
         id: `ai-plan-${Date.now()}`,
         generatedAt: new Date().toISOString(),
         schedule: mergedSchedule,
+        omittedTasks: omittedTasks
       };
 
       db.aiHistory.unshift(planResult);
@@ -398,21 +756,42 @@ async function startServer() {
 
     try {
       const ai = getAi();
+
+      // OPTIMIZATION: Strip out any unnecessary fields from tasks and commitments to shrink input prompt size
+      const sanitizedPendingTasks = pendingTasks.map(t => ({
+        id: t.id,
+        name: t.name,
+        duration: t.duration,
+        priority: t.priority,
+        category: t.category,
+        difficulty: t.difficulty,
+        energyRequired: t.energyRequired,
+        deadline: t.deadline,
+        deadlineTime: t.deadlineTime
+      }));
+
+      const sanitizedCommitments = todayCommitments.map(c => ({
+        id: c.id,
+        title: c.title,
+        startTime: c.startTime,
+        endTime: c.endTime
+      }));
+
       const prompt = `
         You are DeadlineAI, an advanced cybernetic productivity scheduling coach.
         You are designing an optimized calendar schedule for the user today (${currentDate}) starting from the current time: ${currentTime}.
 
         USER SETTINGS:
-        - Work Mode: ${settings.workMode} (modes: 'work', 'study', 'exam' - 'exam' is high intensity, 'study' requires more breaks)
+        - Work Mode: ${settings.workMode} (modes: 'work', 'study', 'exam')
         - Focus Session Target Duration: ${settings.focusDuration} minutes
         - Break Target Duration: ${settings.breakDuration} minutes
         - Core Goal: ${settings.productivityGoal}
 
-        PENDING TASKS TO SCHEDULE:
-        ${JSON.stringify(pendingTasks, null, 2)}
+        PENDING TASKS TO SCHEDULE (Sanitized):
+        ${JSON.stringify(sanitizedPendingTasks, null, 2)}
 
-        FIXED COMMITMENTS (These times are strictly locked and must not be moved or overlapped):
-        ${JSON.stringify(todayCommitments, null, 2)}
+        FIXED COMMITMENTS (Sanitized):
+        ${JSON.stringify(sanitizedCommitments, null, 2)}
 
         YOUR TASK:
         1. Create an highly efficient daily timeline (blocks of tasks, commitments, focus sessions, and breaks) starting from ${currentTime}.
@@ -420,19 +799,21 @@ async function startServer() {
         3. Insert "focus" blocks for pending tasks around the target focus duration (${settings.focusDuration} mins).
         4. Insert "break" blocks of ${settings.breakDuration} mins between focus sessions to prevent burnout.
         5. Prioritize pending tasks based on:
-           - Proximity of deadline (urgent tasks first)
+           - Proximity of deadline (CRITICAL: Give absolute priority to the tasks whose deadline is near. Closer deadlines MUST be scheduled before farther ones.)
            - Priority (high, medium, low)
-           - Difficulty and estimated Energy Required (align high energy tasks with early slots, or space them out)
+           - Difficulty and estimated Energy Required
         6. Do not schedule anything after 23:30 (user decompress and sleep time).
-        7. If there are too many tasks or fixed commitments, identify "Overload", flag conflict warnings, and list suggestions (e.g. "Suggest moving Gym Session to tomorrow because of overload").
-        8. For each original task scheduled, explain WHY in the "whySelected" output.
+        7. If there are too many tasks or fixed commitments, identify "Overload", flag conflict warnings, and list suggestions.
+        8. For each original task scheduled, explain WHY in the "whySelected" output. Keep the explanation extremely short (max 1 sentence).
         9. Select one task to recommend starting IMMEDIATELY.
-        10. Provide 2-3 custom high-value futuristic coach warnings, 2-3 suggestions, and a powerful motivational quote.
+        10. Provide 2 custom high-value futuristic coach warnings, 2 suggestions, and a powerful motivational quote.
+
+        CRITICAL PERFORMANCE REQUIREMENT: Keep all textual warnings, suggestions, explanations, and quotes extremely brief (max 1 short sentence each) to minimize response latency.
 
         You MUST respond in strict JSON matching the requested schema.
       `;
 
-      const response = await ai.models.generateContent({
+      const response = await generateContentWithRetry(ai, {
         model: 'gemini-3.5-flash',
         contents: prompt,
         config: {
@@ -460,20 +841,22 @@ async function startServer() {
               },
               warnings: {
                 type: Type.ARRAY,
-                items: { type: Type.STRING }
+                items: { type: Type.STRING },
+                description: "Max 2 extremely brief warnings (1 sentence each)."
               },
               suggestions: {
                 type: Type.ARRAY,
-                items: { type: Type.STRING }
+                items: { type: Type.STRING },
+                description: "Max 2 extremely brief suggestions (1 sentence each)."
               },
-              motivationalQuote: { type: Type.STRING },
+              motivationalQuote: { type: Type.STRING, description: "One short motivational punchline." },
               whySelected: {
                 type: Type.ARRAY,
                 items: {
                   type: Type.OBJECT,
                   properties: {
                     taskId: { type: Type.STRING, description: "ID of the task" },
-                    explanation: { type: Type.STRING, description: "Cyberpunk-styled coach explanation why this was scheduled at this time" }
+                    explanation: { type: Type.STRING, description: "Extremely short (max 1 short sentence) explanation." }
                   },
                   required: ['taskId', 'explanation']
                 }
@@ -513,7 +896,8 @@ async function startServer() {
         warnings: cleanJson.warnings || [],
         suggestions: cleanJson.suggestions || [],
         motivationalQuote: cleanJson.motivationalQuote || "Power through the timeline, Hacker.",
-        whySelected: whySelectedMap
+        whySelected: whySelectedMap,
+        omittedTasks: omittedTasks
       };
 
       db.aiHistory.unshift(planResult);
@@ -532,6 +916,7 @@ async function startServer() {
         id: `ai-plan-${Date.now()}`,
         generatedAt: new Date().toISOString(),
         schedule: mergedSchedule,
+        omittedTasks: omittedTasks
       };
 
       db.aiHistory.unshift(planResult);
@@ -575,8 +960,20 @@ function generateMockSchedule(
   const suggestions: string[] = [];
   const whySelected: { [key: string]: string } = {};
 
-  // Sort tasks by priority
+  // Sort tasks by deadline proximity first, then by priority
   const sortedTasks = [...tasks].sort((a, b) => {
+    const dStrA = a.deadline || '9999-12-31';
+    const tStrA = a.deadlineTime || '23:59';
+    const deadlineValA = `${dStrA}T${tStrA}`;
+
+    const dStrB = b.deadline || '9999-12-31';
+    const tStrB = b.deadlineTime || '23:59';
+    const deadlineValB = `${dStrB}T${tStrB}`;
+
+    if (deadlineValA !== deadlineValB) {
+      return deadlineValA.localeCompare(deadlineValB);
+    }
+
     const priorities = { high: 3, medium: 2, low: 1 };
     return priorities[b.priority] - priorities[a.priority];
   });

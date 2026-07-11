@@ -2,6 +2,7 @@ export interface Task {
   id: string;
   name: string;
   deadline: string; // YYYY-MM-DD
+  deadlineTime?: string; // HH:MM (24-hour format)
   duration: number; // in minutes
   priority: 'low' | 'medium' | 'high';
   category: string;
@@ -31,6 +32,7 @@ export interface AIHistoryItem {
   suggestions: string[];
   motivationalQuote: string;
   whySelected: { [taskId: string]: string };
+  omittedTasks?: { id: string; name: string; deadline: string; deadlineTime?: string }[];
 }
 
 export interface ScheduleBlock {

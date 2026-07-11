@@ -56,6 +56,32 @@ body {
   overflow-x: hidden;
 }
 
+/* Global Dark-Themed Scrollbars */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(139, 92, 246, 0.3) #020617;
+}
+
+/* WebKit scrollbar styles */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-track {
+  background: #020617;
+}
+
+::-webkit-scrollbar-thumb {
+  background: rgba(139, 92, 246, 0.35);
+  border-radius: 9999px;
+  border: 2px solid #020617;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(6, 182, 212, 0.6);
+}
+
 @keyframes cyber-pulse {
   0%, 100% {
     opacity: 0.8;

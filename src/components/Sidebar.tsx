@@ -1,5 +1,5 @@
 import React from 'react';
-import { LayoutDashboard, PlusCircle, CalendarDays, BrainCircuit, Settings, Calendar, BarChart3, Clock, Zap } from 'lucide-react';
+import { LayoutDashboard, PlusCircle, CalendarDays, BrainCircuit, Settings, Calendar, BarChart3, Clock, Zap, MessageSquare } from 'lucide-react';
 import { motion } from 'motion/react';
 import { UserSettings } from '../types';
 
@@ -19,6 +19,7 @@ export default function Sidebar({ activeTab, setActiveTab, settings, isMobileOpe
     { id: 'planner', label: 'Planner', icon: BrainCircuit, highlight: true },
     { id: 'calendar', label: 'Calendar', icon: Calendar },
     { id: 'analytics', label: 'Analytics', icon: BarChart3 },
+    { id: 'chat', label: 'AI Coach Chat', icon: MessageSquare },
     { id: 'settings', label: 'Settings', icon: Settings },
   ];
 
@@ -66,32 +67,32 @@ export default function Sidebar({ activeTab, setActiveTab, settings, isMobileOpe
         onTouchStart={handleTouchStart}
         onTouchMove={handleTouchMove}
         onTouchEnd={handleTouchEnd}
-        className={`w-80 bg-slate-950/95 backdrop-blur-2xl border-r border-violet-500/10 flex flex-col h-screen fixed top-0 overflow-y-auto z-50 transition-transform duration-300 ease-in-out md:translate-x-0 md:left-0 ${
+        className={`w-[340px] bg-slate-950/98 backdrop-blur-3xl border-r border-slate-900/30 shadow-[4px_0_30px_rgba(0,0,0,0.6)] flex flex-col h-screen fixed top-0 overflow-y-auto z-50 transition-transform duration-300 ease-in-out md:translate-x-0 md:left-0 ${
           isMobileOpen
-            ? 'translate-x-0 left-0 shadow-[0_0_50px_rgba(139,92,246,0.25)]'
+            ? 'translate-x-0 left-0 shadow-[0_0_50px_rgba(139,92,246,0.15)]'
             : '-translate-x-full left-0'
         }`}
       >
         {/* Brand Header */}
-        <div className="p-8 border-b border-violet-500/10 flex flex-col gap-2 relative overflow-hidden group">
+        <div className="h-28 px-8 border-b border-slate-900/40 flex items-center relative overflow-hidden group flex-shrink-0">
           <div className="absolute top-0 right-0 w-32 h-32 bg-violet-600/10 rounded-full blur-2xl group-hover:bg-violet-600/20 transition-all duration-700"></div>
           <div className="absolute -bottom-8 -left-8 w-24 h-24 bg-cyan-500/10 rounded-full blur-2xl"></div>
           
-          <div className="flex items-center gap-3">
-            <div className="p-2.5 rounded-xl bg-gradient-to-tr from-violet-600 via-purple-600 to-cyan-400 shadow-[0_0_20px_rgba(139,92,246,0.4)] animate-pulse">
+          <div className="flex items-center gap-4 w-full relative z-10">
+            <div className="p-3 rounded-xl bg-gradient-to-tr from-violet-600 via-purple-600 to-cyan-400 shadow-[0_0_20px_rgba(139,92,246,0.45)] animate-pulse flex-shrink-0 flex items-center justify-center w-12 h-12">
               <Zap className="w-6 h-6 text-white drop-shadow-[0_0_8px_rgba(255,255,255,0.8)]" />
             </div>
-            <div>
-              <h1 className="text-2xl font-bold font-sans tracking-tight text-white flex items-center gap-1">
+            <div className="flex flex-col justify-center">
+              <h1 className="text-2xl font-bold font-sans tracking-tight text-white flex items-center gap-1 leading-none">
                 Deadline<span className="text-transparent bg-clip-text bg-gradient-to-r from-purple-400 to-cyan-300 drop-shadow-[0_0_10px_rgba(6,182,212,0.5)]">AI</span>
               </h1>
-              <p className="text-[10px] font-mono tracking-widest text-violet-400/80 uppercase">Adaptive scheduler</p>
+              <p className="text-[10px] font-mono tracking-widest text-violet-400/80 uppercase mt-1 leading-none">Adaptive scheduler</p>
             </div>
           </div>
         </div>
 
         {/* Navigation List */}
-        <nav className="flex-grow px-4 py-8 flex flex-col gap-2">
+        <nav className="flex-grow px-5 mt-6 pb-8 flex flex-col gap-2.5">
           {navItems.map((item) => {
             const isActive = activeTab === item.id;
             const Icon = item.icon;
